@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import pytest
+
+from graph_memory.experiment.config import ProvenanceRgcnMethodConfig
+from graph_memory.models.graph_retriever.checkpoint import (
+    load_rgcn_checkpoint,
+    save_rgcn_checkpoint,
+)
+from graph_memory.models.graph_retriever.config.records import RgcnTrainingConfig
+from graph_memory.models.graph_retriever.factory import build_model_from_config
+from graph_memory.registry.retrieval_builders import build_retrieval
+from graph_memory.models.graph_retriever.provenance import (
+    provenance_embedding_request,
+    provenance_train_pair_task,
+    provenance_training_label,
+)
+from graph_memory.models.graph_retriever.provenance_training import (
+    train_provenance_graph_retriever,
+)
+from graph_memory.retrieval.execution.service import run_retrieval
+from graph_memory.retrieval.methods.ids import RetrievalMethodId
+from graph_memory.retrieval.requests import TextRankingRequest
+from graph_memory.training_pairs import build_train_pairs
+from graph_memory.training_pairs.config import NegativeSamplingConfig
+from tests.test_provenance_rgcn_tensorization import (
+    DeterministicEmbeddingProvider,
+    _graph_and_request,
+    _model_config,
+)
+
+
+def test_tiny_natural_provenance_training_and_checkpoint(tmp_path) -> None:
+    graph, base_request = _graph_and_request(
+        task_id="base-task", query_text="Which result completed the chain?"
+    )
+    requests = [
+        base_request.model_copy(update={"task_id": task_id, "query_text": query_text})
+        for task_id, query_text in (
+            ("train-one", "What was verified?"),
+            ("train-two", "Which result completed the chain?"),
+            ("dev-one", "What result was verified?"),
+            ("dev-two", "Find the completed chain result."),
+        )
+    ]
+    candidate = next(
+        candidate
+        for candidate in base_request.candidates
+        if candidate.item_id == "output-content:c4:chunk:0"
+    )
+
+    def label_for(request):
+        return provenance_training_label(
+            request,
+            gold_spans=candidate.source_spans,
+        )
+
+    train_labels = [label_for(request) for request in requests[:2]]
+    pair_result = build_train_pairs(
+        [
+            provenance_train_pair_task(request, label)
+            for request, label in zip(requests[:2], train_labels, strict=True)
+        ],
+        NegativeSamplingConfig(
+            random_seed=19,
+            easy_random_per_positive=1,
+            hard_bm25_per_positive=0,
+            hard_dense_per_positive=0,
+            hard_graph_neighbor_per_positive=1,
+            hard_pool_size=10,
+        ),
+    )
+    dev_labels = [label_for(request) for request in requests[2:]]
+    provider = DeterministicEmbeddingProvider()
+    result = train_provenance_graph_retriever(
+        train_requests=requests[:2],
+        train_labels=train_labels,
+        train_pairs=pair_result.pairs,
+        dev_requests=requests[2:],
+        dev_labels=dev_labels,
+        model_config=_model_config(),
+        training_config=RgcnTrainingConfig(
+            learning_rate=1e-3,
+            per_device_graph_batch_size=2,
+            epochs=1,
+            random_seed=19,
+        ),
+        text_embedding_provider=provider,
+        seed_signal_provider=provider,
+        device="cpu",
+    )
+
+    assert result.best_epoch in {0, 1}
+    assert result.global_step == 1
+    metrics = result.metric_records[0]
+    assert "dev_recall_at_5" in metrics
+    assert "initial_dev_recall_at_5" in metrics
+    assert metrics["selection_metric_value"] == metrics["dev_recall_at_5"]
+
+    checkpoint_path = tmp_path / "natural-provenance-rgcn.pt"
+    selected_model = build_model_from_config(result.model_config)
+    selected_model.load_state_dict(result.best_model_state_dict)
+    save_rgcn_checkpoint(
+        checkpoint_path,
+        method_name=RetrievalMethodId.PROVENANCE_RGCN,
+        model=selected_model,
+        epoch=result.best_epoch,
+        global_step=result.global_step,
+        best_dev_metric=result.best_dev_metric,
+        model_config=result.model_config,
+        training_config=result.training_config,
+    )
+    dev_request = requests[2]
+    text_request = TextRankingRequest(
+        task_id=dev_request.task_id,
+        query_text=dev_request.query_text,
+        candidates=dev_request.candidates,
+    )
+    method_config = ProvenanceRgcnMethodConfig.model_construct(
+        method="provenance_rgcn",
+        variant="full_rgcn",
+    )
+    first_method, first_provenance, first_requests = build_retrieval(
+        method_config,
+        text_requests=[text_request],
+        provenance_graphs=[graph],
+        graph_ids_by_task_id={dev_request.task_id: graph.graph_id},
+        checkpoint=checkpoint_path,
+        text_embedding_provider=DeterministicEmbeddingProvider(),
+        device="cpu",
+    )
+    second_method, _second_provenance, second_requests = build_retrieval(
+        method_config,
+        text_requests=[text_request],
+        provenance_graphs=[graph],
+        graph_ids_by_task_id={dev_request.task_id: graph.graph_id},
+        checkpoint=checkpoint_path,
+        text_embedding_provider=DeterministicEmbeddingProvider(),
+        device="cpu",
+    )
+    with pytest.raises(ValueError, match="checkpoint variant does not match"):
+        build_retrieval(
+            method_config.model_copy(update={"variant": "random_edges"}),
+            text_requests=[text_request],
+            provenance_graphs=[graph],
+            graph_ids_by_task_id={dev_request.task_id: graph.graph_id},
+            checkpoint=checkpoint_path,
+            text_embedding_provider=DeterministicEmbeddingProvider(),
+            device="cpu",
+        )
+    first_results = run_retrieval(
+        retrieval_method=first_method,
+        requests=first_requests,
+        top_k=3,
+    )
+    second_results = run_retrieval(
+        retrieval_method=second_method,
+        requests=second_requests,
+        top_k=3,
+    )
+
+    control = first_provenance.get("control")
+    assert control is not None
+    assert control["ablation_name"] == "full_rgcn"
+    assert control["task_count"] == 1
+    assert first_results[0].ranked_nodes == second_results[0].ranked_nodes
+    assert first_results[0].retrieved_subgraph == second_results[0].retrieved_subgraph
+    assert first_results[0].method is RetrievalMethodId.PROVENANCE_RGCN
+    candidate_spans = {
+        candidate.item_id: candidate.source_spans
+        for candidate in dev_request.candidates
+    }
+    assert all(
+        ranked.source_spans == candidate_spans[ranked.node_id]
+        for ranked in first_results[0].ranked_nodes
+    )
+
+
+def test_wo_graph_checkpoint_ranking_matches_dense_seed_scores(tmp_path) -> None:
+    graph, request = _graph_and_request(
+        task_id="seed-ranking", query_text="Which result completed the chain?"
+    )
+    model_config = _model_config(num_layers=0)
+    model = build_model_from_config(model_config)
+    checkpoint_path = tmp_path / "provenance-seed-passthrough.pt"
+    save_rgcn_checkpoint(
+        checkpoint_path,
+        method_name=RetrievalMethodId.PROVENANCE_RGCN,
+        model=model,
+        epoch=1,
+        global_step=0,
+        best_dev_metric=0.0,
+        model_config=model_config,
+        training_config=RgcnTrainingConfig(epochs=1),
+    )
+    text_request = TextRankingRequest(
+        task_id=request.task_id,
+        query_text=request.query_text,
+        candidates=request.candidates,
+    )
+    provider = DeterministicEmbeddingProvider()
+    retrieval_method, _provenance, requests = build_retrieval(
+        ProvenanceRgcnMethodConfig.model_construct(
+            method="provenance_rgcn", variant="wo_graph"
+        ),
+        text_requests=[text_request],
+        provenance_graphs=[graph],
+        graph_ids_by_task_id={request.task_id: graph.graph_id},
+        checkpoint=checkpoint_path,
+        text_embedding_provider=provider,
+        seed_signal_provider=provider,
+        device="cpu",
+    )
+    result = run_retrieval(
+        retrieval_method=retrieval_method,
+        requests=requests,
+        top_k=len(request.candidates),
+    )[0]
+    embedding_request, _node_ids = provenance_embedding_request(request)
+    candidate_ids = {candidate.item_id for candidate in request.candidates}
+    expected = sorted(
+        (
+            signal
+            for signal in provider.score_task(embedding_request)
+            if signal.node_id in candidate_ids
+        ),
+        key=lambda signal: (-signal.score, signal.node_id),
+    )
+
+    assert [node.node_id for node in result.ranked_nodes] == [
+        signal.node_id for signal in expected
+    ]
+    assert [node.score for node in result.ranked_nodes] == pytest.approx(
+        [signal.score for signal in expected]
+    )
+
+
+def test_provenance_checkpoint_round_trip_requires_matching_method(tmp_path) -> None:
+    model_config = _model_config()
+    training_config = RgcnTrainingConfig(epochs=2)
+    model = build_model_from_config(model_config)
+    checkpoint_path = tmp_path / "provenance-rgcn.pt"
+
+    payload = save_rgcn_checkpoint(
+        checkpoint_path,
+        method_name=RetrievalMethodId.PROVENANCE_RGCN,
+        model=model,
+        epoch=1,
+        global_step=4,
+        best_dev_metric=0.75,
+        model_config=model_config,
+        training_config=training_config,
+    )
+    loaded = load_rgcn_checkpoint(
+        checkpoint_path,
+        expected_method=RetrievalMethodId.PROVENANCE_RGCN,
+        map_location="cpu",
+    )
+
+    assert payload["method_name"] == RetrievalMethodId.PROVENANCE_RGCN
+    assert payload["epoch"] == 1
+    assert loaded.model_config == model_config
+    assert loaded.training_config == training_config
+    with pytest.raises(ValueError, match="must match"):
+        save_rgcn_checkpoint(
+            tmp_path / "invalid-method-config.pt",
+            method_name=RetrievalMethodId.DENSE_RGCN_GRAPH_RETRIEVER,
+            model=model,
+            epoch=1,
+            global_step=4,
+            best_dev_metric=0.75,
+            model_config=model_config,
+            training_config=training_config,
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        load_rgcn_checkpoint(
+            checkpoint_path,
+            expected_method=RetrievalMethodId.DENSE_RGCN_GRAPH_RETRIEVER,
+            map_location="cpu",
+        )

@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+import csv
+import gzip
+import json
+from pathlib import Path
+
+import yaml
+from hydra import compose, initialize_config_dir
+from graph_memory.evaluation.contracts import MetricRow
+from graph_memory.experiment.artifacts import (
+    ArtifactKind,
+    ArtifactPublisher,
+    EvaluationArtifactRef,
+    PredictionsArtifactRef,
+    ProcessedAssetStore,
+)
+from graph_memory.experiment.config import (
+    ResolvedExperimentConfig,
+    parse_composed_config,
+    resolve_experiment_config,
+)
+from graph_memory.experiment.output import project_run_output
+from graph_memory.experiment.results import FinalExperimentResult
+from graph_memory.io import write_csv, write_json, write_jsonl
+from scripts.deliver.collect_run_artifacts import collect_run_artifacts
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _config(name: str) -> ResolvedExperimentConfig:
+    source = (ROOT / "tests" / "fixtures" / "hotpotqa_smoke.json").as_posix()
+    with initialize_config_dir(config_dir=str(ROOT / "configs"), version_base="1.3"):
+        composed = compose(
+            config_name="config",
+            overrides=[
+                f"name={name}",
+                "dataset=hotpotqa",
+                "profile=smoke",
+                "method=bm25",
+                "device=cpu",
+                *[
+                    f"dataset.splits.{split}.source={source}"
+                    for split in ("train", "dev", "test")
+                ],
+            ],
+        )
+    return resolve_experiment_config(
+        parse_composed_config(composed), repository_root=ROOT
+    )
+
+
+def _result(store: ProcessedAssetStore) -> FinalExperimentResult:
+    with ArtifactPublisher(
+        store,
+        kind=ArtifactKind.PREDICTIONS,
+        namespace="bm25",
+        task_identity="test-rank",
+        origin={"stage": "rank", "method": "bm25"},
+    ) as publisher:
+        write_json(
+            publisher.workspace / "predictions.json",
+            [
+                {
+                    "task_id": "one",
+                    "method": "bm25",
+                    "ranked_nodes": [
+                        {
+                            "node_id": "m1",
+                            "score": 1.0,
+                            "source_spans": [],
+                            "token_count": 10,
+                        }
+                    ],
+                    "retrieved_subgraph": {"nodes": ["m1"], "edges": []},
+                    "latency_ms": 3.0,
+                    "input_tokens": 2,
+                }
+            ],
+        )
+        write_json(
+            publisher.workspace / "provenance.json",
+            {"method": "bm25", "model": None, "device": None, "encoder": None},
+        )
+        ranking_ref = publisher.publish(
+            {
+                "predictions": "predictions.json",
+                "provenance": "provenance.json",
+            },
+            metadata={"production_seconds": 3.0},
+        )
+    assert isinstance(ranking_ref, PredictionsArtifactRef)
+
+    metric_row = MetricRow.model_validate(
+        dict(
+            method="bm25",
+            evaluation_schema="evidence_v3",
+            recall_at_2=1.0,
+            recall_at_5=1.0,
+            recall_at_10=1.0,
+            evidence_f1_at_5=1.0,
+            evidence_f1_at_10=1.0,
+            full_support_at_5=1.0,
+            full_support_at_10=1.0,
+            mrr=1.0,
+            connected_evidence_recall_at_5=1.0,
+            connected_evidence_recall_at_10=1.0,
+            query_evidence_connectivity_at_10=1.0,
+            path_recall_at_10="N/A",
+            edge_recall_at_10="N/A",
+            edge_precision_at_10="N/A",
+            edge_f1_at_10="N/A",
+            retrieval_latency_per_query=3.0,
+            index_build_time=0.0,
+            graph_construction_time=0.0,
+            memory_size="N/A",
+            avg_retrieved_nodes=1.0,
+            avg_retrieved_edges=0.0,
+        )
+    )
+    with ArtifactPublisher(
+        store,
+        kind=ArtifactKind.EVALUATION,
+        namespace="bm25",
+        task_identity="test-evaluate",
+        origin={"stage": "evaluate", "method": "bm25"},
+    ) as publisher:
+        write_csv(
+            publisher.workspace / "metrics.csv",
+            [metric_row.model_dump(mode="json", by_alias=True)],
+            list(metric_row.model_dump(mode="json", by_alias=True)),
+        )
+        write_jsonl(publisher.workspace / "failure_cases.jsonl", [])
+        write_jsonl(
+            publisher.workspace / "per_task.jsonl",
+            [{"task_id": "one", "Recall@5": 1.0}],
+        )
+        evaluation_ref = publisher.publish(
+            {
+                "metrics": "metrics.csv",
+                "failure_cases": "failure_cases.jsonl",
+                "per_task": "per_task.jsonl",
+            },
+            shape={"metric_rows": 1, "failure_cases": 0, "per_task_rows": 1},
+        )
+    assert isinstance(evaluation_ref, EvaluationArtifactRef)
+
+    return FinalExperimentResult(
+        method="bm25",
+        variant=None,
+        ranking=ranking_ref,
+        evaluation=evaluation_ref,
+        assets=(ranking_ref, evaluation_ref),
+    )
+
+
+def test_output_projection_is_complete_and_never_copies_processed_assets(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repo"
+    store = ProcessedAssetStore(repository / "data" / "processed")
+    output = repository / "runs" / "named-run"
+    result = _result(store)
+
+    project_run_output(
+        output,
+        repository_root=repository,
+        config=_config("named-run"),
+        overrides=("method=bm25",),
+        result=result,
+    )
+
+    summary = yaml.safe_load((output / "workflow" / "summary.yaml").read_text())
+    manifest = yaml.safe_load((output / "assets" / "manifest.yaml").read_text())
+    assert summary["method"] == "bm25"
+    assert summary["seed"] == 13
+    assert summary["cache_refresh"] is False
+    assert summary["output_schema_version"] == 2
+    assert summary["prediction_prefix_token_budget"] == 8192
+    assert {asset["digest"] for asset in manifest["assets"]} == {
+        asset.digest for asset in result.assets
+    }
+    assert not (output / "workflow" / "task_results.yaml").exists()
+    with (output / "metrics" / "final.metrics.csv").open(newline="") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["Method"] == "bm25"
+    assert float(row["Retrieval Latency / Query"]) == 3.0
+    assert not any(path.suffix in {".pt", ".ckpt"} for path in output.rglob("*"))
+    retrieval_provenance = json.loads(
+        (output / "workflow" / "retrieval_provenance.json").read_text(encoding="utf-8")
+    )
+    assert retrieval_provenance["method"] == "bm25"
+    prediction_prefix = output / "predictions" / "ranked_prefix.jsonl.gz"
+    assert prediction_prefix.is_file()
+    with gzip.open(prediction_prefix, "rt", encoding="utf-8") as stream:
+        prediction = json.loads(stream.readline())
+    assert prediction["task_id"] == "one"
+    assert [node["node_id"] for node in prediction["ranked_nodes"]] == ["m1"]
+
+
+def test_delivery_mirrors_output_tree_and_records_asset_references(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repo"
+    output = repository / "runs" / "named-run"
+    result = _result(ProcessedAssetStore(repository / "data" / "processed"))
+    project_run_output(
+        output,
+        repository_root=repository,
+        config=_config("named-run"),
+        overrides=(),
+        result=result,
+    )
+
+    delivery = collect_run_artifacts(output, output_root=repository / "results")
+    delivered = repository / "results" / "named-run"
+    assert delivery["run_mode"] == "single"
+    assert (delivered / "assets" / "manifest.yaml").is_file()
+    assert not (delivered / "data" / "processed").exists()
+    manifest = json.loads(
+        (delivered / "delivery_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["copied_count"] == delivery["copied_count"]
+    assert manifest["scientific_jobs"][0]["per_task_count"] == 1
+    assert manifest["scientific_jobs"][0]["output_schema_version"] == 2
+    assert all(len(item["sha256"]) == 64 for item in manifest["copied"])
+
+
+def test_run_output_guard_rejects_root_and_external_paths(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    result = _result(ProcessedAssetStore(repository / "data" / "processed"))
+    for invalid in (repository / "runs", repository / "outside"):
+        try:
+            project_run_output(
+                invalid,
+                repository_root=repository,
+                config=_config("invalid-run"),
+                overrides=(),
+                result=result,
+            )
+        except ValueError as error:
+            assert "named child below runs" in str(error)
+        else:
+            raise AssertionError(f"expected output guard rejection for {invalid}")

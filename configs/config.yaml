@@ -1,0 +1,43 @@
+defaults:
+  - dataset: musique
+  - profile: full
+  - method: bm25
+  - _self_
+
+name: ???
+seed: 13
+# Fixed test-split seed, decoupled from the training `seed`. The test split is
+# sampled with this value so it stays identical across training seeds and
+# methods (shared fixed test set). Train/dev keep using `seed`.
+split_seed: 13
+device: cuda
+top_k: 10
+cache:
+  refresh: false
+encoding:
+  enable_gpupool: false
+  chunk_size: 100000
+graph:
+  max_query_overlap: 20
+  max_entity_neighbors: 10
+  max_bridge_edges: 50
+  use_spacy: false
+tracking:
+  database: runs/.mlflow/tracking.db
+  artifact_root: runs/.mlflow/artifacts
+  experiment_name: graph-memory
+
+hydra:
+  job:
+    chdir: false
+    config:
+      override_dirname:
+        exclude_keys:
+          - name
+          - profile
+          - method
+  run:
+    dir: runs/${name}
+  sweep:
+    dir: runs/${name}
+    subdir: ${hydra.job.num}_${method.method}

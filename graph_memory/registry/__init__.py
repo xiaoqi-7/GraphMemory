@@ -1,0 +1,1 @@
+"""Closed static retrieval construction."""

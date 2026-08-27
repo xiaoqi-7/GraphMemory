@@ -1,0 +1,18 @@
+name: twowiki
+strict_invalid_examples: false
+splits:
+  train:
+    kind: raw
+    source: data/2wiki/raw/train.json
+    offset: 0
+    capacity: 167454
+  dev:
+    kind: raw
+    source: data/2wiki/raw/dev.json
+    offset: 0
+    capacity: 12576
+  test:
+    kind: raw
+    source: data/2wiki/raw/dev.json
+    offset: 500
+    capacity: 12576

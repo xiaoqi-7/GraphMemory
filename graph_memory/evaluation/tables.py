@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from graph_memory.evaluation.contracts import (
+    EVIDENCE_METRIC_COLUMNS,
+    MetricRow,
+    MetricTableRow,
+)
+
+MAIN_RESULT_COLUMNS = [
+    "Method",
+    "Evaluation Schema",
+    "Recall@2",
+    "Recall@5",
+    "Recall@10",
+    "Evidence F1@5",
+    "Evidence F1@10",
+    "Evidence Density@5",
+    "Evidence Density@10",
+    "Coverage@256 Tokens",
+    "Coverage@512 Tokens",
+    "Coverage@1024 Tokens",
+    "Coverage@2048 Tokens",
+    "Coverage@4096 Tokens",
+    "Coverage@8192 Tokens",
+    "Full Support@256 Tokens",
+    "Full Support@512 Tokens",
+    "Full Support@1024 Tokens",
+    "Full Support@2048 Tokens",
+    "Full Support@4096 Tokens",
+    "Full Support@8192 Tokens",
+    "Coverage Budget-AUC",
+    "Full Support Budget-AUC",
+    "Span F1@2048 Tokens",
+    "Evidence Density@2048 Tokens",
+    "Full Support@5",
+    "Full Support@10",
+    "MRR",
+]
+
+PATH_RESULT_COLUMNS = [
+    "Method",
+    "Evaluation Schema",
+    "Connected Evidence Recall@5",
+    "Connected Evidence Recall@10",
+    "Query-Evidence Connectivity@10",
+    "Path Recall@10",
+    "Edge Recall@10",
+    "Edge Precision@10",
+    "Edge F1@10",
+]
+
+EFFICIENCY_RESULT_COLUMNS = [
+    "Method",
+    "Evaluation Schema",
+    "Index Build Time",
+    "Graph Construction Time",
+    "Retrieval Latency / Query",
+    "Memory Size",
+    "Avg Retrieved Nodes",
+    "Avg Retrieved Edges",
+]
+
+WIDE_METRIC_COLUMNS = EVIDENCE_METRIC_COLUMNS
+
+
+def split_metric_tables(
+    rows: list[MetricRow],
+) -> tuple[list[MetricTableRow], list[MetricTableRow], list[MetricTableRow]]:
+    schemas = {row.evaluation_schema for row in rows}
+    if len(schemas) > 1:
+        raise ValueError(
+            f"Cannot aggregate mixed evaluation schemas={sorted(schemas)}."
+        )
+    main_rows = [_select_columns(row, MAIN_RESULT_COLUMNS) for row in rows]
+    path_rows = [_select_columns(row, PATH_RESULT_COLUMNS) for row in rows]
+    efficiency_rows = [_select_columns(row, EFFICIENCY_RESULT_COLUMNS) for row in rows]
+    return main_rows, path_rows, efficiency_rows
+
+
+def _select_columns(row: MetricRow, columns: list[str]) -> MetricTableRow:
+    dumped = row.model_dump(mode="json", by_alias=True)
+    return {column: dumped[column] for column in columns}
+
+
+__all__ = [
+    "EFFICIENCY_RESULT_COLUMNS",
+    "MAIN_RESULT_COLUMNS",
+    "PATH_RESULT_COLUMNS",
+    "WIDE_METRIC_COLUMNS",
+    "split_metric_tables",
+]

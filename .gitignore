@@ -1,0 +1,37 @@
+.pytest_cache/
+.pytest-tmp/
+.hf_cache/
+__pycache__/
+*.py[cod]
+data/
+!scripts/data/
+!scripts/data/*.py
+results/
+runs/
+/models/
+report/tmp/
+
+# Local WSDM submission template bundle; keep only the authored paper sources.
+docs/raw/wsdm2027/
+
+.venv/
+.env
+.env.*
+!.env.example
+
+.ck/
+
+# Pi runtime state and generated subagent transcripts/artifacts.
+.pi/
+.pi-subagents/
+# Large raw ablation dumps; regenerate with scripts/analyze_provenance_ablation.py
+report/provenance/ablation_rows.json
+
+# Local review interfaces; durable annotations belong under data/.
+.ui/
+
+# Stale paper draft bundle; the authoritative version is on arXiv.
+docs/raw/
+
+# Internal delivery note; describes the full offline package, not this repo.
+DELIVERY_README.md

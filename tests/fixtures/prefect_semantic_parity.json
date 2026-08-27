@@ -1,0 +1,136 @@
+{
+  "excluded_fields": [
+    "latency_ms",
+    "Retrieval Latency / Query",
+    "Index Build Time",
+    "Graph Construction Time",
+    "Memory Size",
+    "path",
+    "timestamp"
+  ],
+  "accepted_non_semantic_differences": [
+    "legacy memory_items/query preparation fields are normalized to candidate_sentences/question",
+    "content-addressed processed URIs replace run-local computation paths",
+    "fresh trainable smoke runs may produce different scores and tie order",
+    "sample count and task identifiers differ when the smoke fixture differs"
+  ],
+  "cases": [
+    {
+      "case": "dense_ft",
+      "method": "dense_ft",
+      "variant": null,
+      "legacy": {
+        "source_run": "dense-ft-1",
+        "prepared": {
+          "task_count": 100,
+          "task_id": "hotpot_5a89432b554299669944a519"
+        },
+        "ranking": {
+          "ranked_count": 28,
+          "top_node_id": "m15"
+        },
+        "evaluation": {
+          "Recall@10": "0.8943333333333334",
+          "MRR": "0.8963154761904762",
+          "Path Recall@10": "N/A",
+          "Edge Recall@10": "N/A"
+        }
+      },
+      "prefect": {
+        "source_run": "prefect-dense-ft-smoke-0717b",
+        "prepared": {
+          "task_count": 1,
+          "task_id": "hotpot_smoke1"
+        },
+        "ranking": {
+          "ranked_count": 4,
+          "top_node_id": "m3"
+        },
+        "evaluation": {
+          "Recall@10": "1.0",
+          "MRR": "1.0",
+          "Path Recall@10": "N/A",
+          "Edge Recall@10": "N/A"
+        }
+      }
+    },
+    {
+      "case": "evidence_rgcn",
+      "method": "dense_rgcn_graph_retriever",
+      "variant": "full_rgcn",
+      "legacy": {
+        "source_run": "rgcn_smoke_flow",
+        "prepared": {
+          "task_count": 1,
+          "task_id": "hotpot_5a89432b554299669944a519"
+        },
+        "ranking": {
+          "ranked_count": 28,
+          "top_node_id": "m19"
+        },
+        "evaluation": {
+          "Recall@10": "0.0",
+          "MRR": "0.058823529411764705",
+          "Path Recall@10": "N/A",
+          "Edge Recall@10": "N/A"
+        }
+      },
+      "prefect": {
+        "source_run": "prefect-rgcn-smoke-0717",
+        "prepared": {
+          "task_count": 1,
+          "task_id": "hotpot_smoke1"
+        },
+        "ranking": {
+          "ranked_count": 4,
+          "top_node_id": "m2"
+        },
+        "evaluation": {
+          "Recall@10": "1.0",
+          "MRR": "0.5",
+          "Path Recall@10": "N/A",
+          "Edge Recall@10": "N/A"
+        }
+      }
+    },
+    {
+      "case": "dense_ft_seeded_rgcn",
+      "method": "dense_ft_rgcn_graph_retriever",
+      "variant": "full_rgcn",
+      "legacy": {
+        "source_run": "beam_rgcn_contract_dense_ft_smoke_20260713",
+        "prepared": {
+          "task_count": 1,
+          "task_id": "musique_2hop__847433_11402"
+        },
+        "ranking": {
+          "ranked_count": 20,
+          "top_node_id": "p16"
+        },
+        "evaluation": {
+          "Recall@10": "0.5",
+          "MRR": "0.125",
+          "Path Recall@10": "0.0",
+          "Edge Recall@10": "0.0"
+        }
+      },
+      "prefect": {
+        "source_run": "prefect-seeded-rgcn-smoke-0717",
+        "prepared": {
+          "task_count": 1,
+          "task_id": "hotpot_smoke1"
+        },
+        "ranking": {
+          "ranked_count": 4,
+          "top_node_id": "m2"
+        },
+        "evaluation": {
+          "Recall@10": "1.0",
+          "MRR": "0.5",
+          "Path Recall@10": "N/A",
+          "Edge Recall@10": "N/A"
+        }
+      }
+    }
+  ]
+}

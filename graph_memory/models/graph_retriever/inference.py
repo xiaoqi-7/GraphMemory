@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+import torch
+
+from graph_memory.graphs.views import induced_edges, model_visible_graph
+from graph_memory.models.graph_retriever.batching import (
+    collate_evidence_tasks,
+    materialize_full_ranking_tasks,
+    move_training_batch,
+    split_batch_node_scores,
+)
+from graph_memory.models.graph_retriever.checkpoint import load_rgcn_checkpoint
+from graph_memory.models.graph_retriever.config.records import RgcnModelConfig
+from graph_memory.models.graph_retriever.contracts import TextEmbeddingProvider
+from graph_memory.models.graph_retriever.factory import build_model_from_config
+from graph_memory.retrieval.contracts import (
+    RankedNode,
+    RetrievalMethodResult,
+    RetrievalTrace,
+)
+from graph_memory.retrieval.methods.ids import RetrievalMethodId
+from graph_memory.retrieval.requests import (
+    EvidenceGraphRankingRequest,
+    RankingMethodRequest,
+    TextRankingRequest,
+)
+from graph_memory.retrieval.signals import (
+    SeedSignal,
+    SeedSignalProvider,
+    seed_signals_from_ranked_nodes,
+)
+
+
+@dataclass(frozen=True)
+class GraphRetrieverInference:
+    """
+    Checkpoint-backed trainable graph retriever inference runtime.
+    基于 checkpoint 的可训练图检索推理 runtime。
+    """
+
+    name: str
+    model: torch.nn.Module
+    model_config: RgcnModelConfig
+    text_embedding_provider: TextEmbeddingProvider
+    seed_signal_provider: SeedSignalProvider
+    device: torch.device
+
+    def rank_task(
+        self, request: RankingMethodRequest, *, top_k: int
+    ) -> RetrievalMethodResult:
+        if not isinstance(request, EvidenceGraphRankingRequest):
+            raise TypeError(
+                f"{self.name} requires EvidenceGraphRankingRequest, "
+                f"got {type(request).__name__}."
+            )
+        graph = request.graph
+        text_request = TextRankingRequest(
+            task_id=request.task_id,
+            query_text=request.query_text,
+            candidates=request.candidates,
+        )
+        tasks = materialize_full_ranking_tasks(
+            ranking_requests=[text_request],
+            graphs=[graph],
+            model_config=self.model_config,
+            text_embedding_provider=self.text_embedding_provider,
+            seed_signal_provider=_PrecomputedGraphRankingSignalProvider(request),
+        )
+        if len(tasks) != 1:
+            raise RuntimeError("Expected exactly one full ranking task tensor.")
+        cpu_batch = collate_evidence_tasks(tasks)
+        with torch.no_grad():
+            batch = move_training_batch(cpu_batch, self.device)
+            logits = self.model(batch).detach().cpu()
+        rows_by_task = split_batch_node_scores(cpu_batch, logits)
+        ranked_nodes = sorted(
+            [
+                RankedNode(node_id=node_id, score=score)
+                for node_id, score in rows_by_task[request.task_id]
+            ],
+            key=lambda ranked_node: (-ranked_node.score, ranked_node.node_id),
+        )
+        top_node_ids = [ranked_node.node_id for ranked_node in ranked_nodes[:top_k]]
+        visible_graph = model_visible_graph(
+            graph, frozenset(self.model_config.enabled_edge_types)
+        )
+        retrieved_edges = induced_edges(visible_graph, top_node_ids)
+        return RetrievalMethodResult(
+            ranked_nodes=tuple(ranked_nodes),
+            trace=RetrievalTrace(retrieved_edges=retrieved_edges),
+        )
+
+
+@dataclass(frozen=True)
+class _PrecomputedGraphRankingSignalProvider:
+    request: EvidenceGraphRankingRequest
+
+    def score_task(self, request: TextRankingRequest) -> list[SeedSignal]:
+        if request.task_id != self.request.task_id:
+            raise ValueError(f"Unexpected graph ranking task_id={request.task_id}.")
+        ranked_nodes = [
+            RankedNode(
+                node_id=candidate.item_id,
+                score=float(self.request.initial_scores.get(candidate.item_id, 0.0)),
+            )
+            for candidate in request.candidates
+        ]
+        return seed_signals_from_ranked_nodes(request, ranked_nodes)
+
+    def score_tasks(
+        self, requests: Sequence[TextRankingRequest]
+    ) -> list[list[SeedSignal]]:
+        return [self.score_task(request) for request in requests]
+
+
+@dataclass(frozen=True)
+class CheckpointGraphRetrieverLoader:
+    """
+    Loads checkpoint-backed graph retriever inference without depending on training.
+    加载 checkpoint-backed graph retriever inference，不依赖 training 生命周期。
+    """
+
+    def load(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        text_embedding_provider: TextEmbeddingProvider,
+        seed_signal_provider: SeedSignalProvider,
+        device: str | torch.device,
+        expected_method: RetrievalMethodId = (
+            RetrievalMethodId.DENSE_RGCN_GRAPH_RETRIEVER
+        ),
+    ) -> GraphRetrieverInference:
+        """
+        Load a trainable graph retriever inference runtime from `best.pt`.
+        从 `best.pt` 加载可训练图检索推理 runtime。
+        """
+
+        checkpoint = load_rgcn_checkpoint(
+            checkpoint_path,
+            expected_method=expected_method,
+            map_location=device,
+        )
+        model = build_model_from_config(checkpoint.model_config).to(device)
+        model.load_state_dict(checkpoint.payload["model_state_dict"])
+        model.eval()
+
+        return GraphRetrieverInference(
+            name=checkpoint.model_config.method_name,
+            model=model,
+            model_config=checkpoint.model_config,
+            text_embedding_provider=text_embedding_provider,
+            seed_signal_provider=seed_signal_provider,
+            device=torch.device(device),
+        )
