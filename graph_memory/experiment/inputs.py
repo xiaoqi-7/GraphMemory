@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,15 @@ LOGGER = logging.getLogger("experiment.inputs")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 HUGGINGFACE_BASE_URL = "https://huggingface.co"
 HUGGINGFACE_MIRROR_BASE_URL = "https://hf-mirror.com"
+
+
+def huggingface_endpoint() -> str:
+    """Return the Hub endpoint to download from.
+
+    ``HF_ENDPOINT`` lets networks that cannot reach huggingface.co point at a
+    mirror (for example https://hf-mirror.com); unset, the official host is used.
+    """
+    return os.environ.get("HF_ENDPOINT") or HUGGINGFACE_BASE_URL
 
 _ISETRACE_SOURCE_REPO = "valiere/ISETrace"
 _ISETRACE_QUERY_REPO = "HazeLocus/ISETrace-Memory-Queries"
@@ -159,7 +169,7 @@ def _ensure_isetrace_dataset(
             revision=ISETRACE_REVISION,
             local_dir=str(trajectory_target.parent),
             allow_patterns=list(_ISETRACE_TRAJECTORY_FILES),
-            endpoint=HUGGINGFACE_BASE_URL,
+            endpoint=huggingface_endpoint(),
         )
 
     if not query_target.exists() or not metadata_target.exists():
@@ -179,7 +189,7 @@ def _ensure_isetrace_dataset(
             revision=_ISETRACE_QUERY_REVISION,
             local_dir=str(query_target.parent.parent),
             allow_patterns=list(_ISETRACE_QUERY_FILES),
-            endpoint=HUGGINGFACE_BASE_URL,
+            endpoint=huggingface_endpoint(),
         )
 
     required = (*required_trajectories, query_target, metadata_target)
@@ -226,7 +236,7 @@ def _ensure_model(model_name: str, *, repository_root: Path) -> None:
         repo_id=repo_id,
         revision=revision,
         local_dir=str(target),
-        endpoint=HUGGINGFACE_BASE_URL,
+        endpoint=huggingface_endpoint(),
     )
 
 
@@ -282,6 +292,7 @@ def _load_prepare_dataset(repository_root: Path):
 
 __all__ = [
     "HUGGINGFACE_MIRROR_BASE_URL",
+    "huggingface_endpoint",
     "ensure_dataset",
     "ensure_encoder_models",
     "ensure_inputs",
