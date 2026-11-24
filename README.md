@@ -1,20 +1,65 @@
-# ISETrace Experiment Reproduction
+# EPGM: When Does Execution Provenance Help Agent Memory Retrieval?
 
-This repository contains the code and configurations used for the paper experiments. Run all commands from the repository root on Linux. A CUDA-capable GPU is required for the trainable methods.
+Code and configurations for the paper **"When Does Execution Provenance Help Agent Memory Retrieval?"**
+(WSDM 2027, Findings). The study asks a narrow question: once an agent's execution trace is already
+indexed and retrievable by a semantic scorer, does propagating over the *execution relationships*
+between the events — what produced what, what was read by what — recover more of the evidence the
+query needs?
+
+![EPGM pipeline](docs/assets/architecture.png)
+
+Four stages. **(A)** A raw agent trace of tool calls and outputs. **(B)** Candidates are built from
+execution-aligned units (one field, one unit) plus an observable provenance graph whose edges are
+string-matched value reuse, artifact read/write, and call/return links — built without ever looking at
+a query. **(C)** A semantic scorer anchors the query to a few top candidates. **(D)** Evidence
+completion expands from those anchors under a fixed token budget: training-free graph search over
+observable paths, or a learned Residual R-GCN whose output is added to the seed score.
+
+The contribution is a controlled attribution, not a new model: the repository reproduces the
+separation between **which fields are indexed**, **how those fields are grouped into candidates**, and
+**whether graph propagation adds anything** on top of a fixed candidate set and a fixed seed ranking.
+
+## Metrics
+
+Every query carries gold evidence as a set of exact character spans in the original trace, so all
+retrieval methods are scored on the same source coordinates.
+
+| Metric | Definition |
+|---|---|
+| **Full Support@B** (FS@B) | Primary. 1 if every gold span is present in the retrieved set, which must fit in `B` evidence tokens; otherwise 0. |
+| **Coverage@B** (Cov@B) | Fraction of gold spans recovered under the same `B`-token budget. |
+| **SpanCov@k** | Fraction of gold spans recovered at a fixed number of candidates `k`, ignoring token cost (the budget-free diagnostic). |
+| **FO-MRR** | First-overlap reciprocal rank: 1 / rank of the first retrieved candidate that overlaps gold. |
+| **Budget-AUC** | Area under the FS or Coverage curve over budgets 256–8192 tokens. |
+
+Full Support is deliberately conservative: it requires the annotated spans, not merely an answer, and
+it does not credit substitute evidence elsewhere in the trace.
 
 ## Setup
 
-Install the locked environment:
+Requires Linux and Python 3.12 (managed by `uv`). A CUDA-capable GPU is needed for the trainable
+methods; deterministic methods run on CPU.
 
 ```bash
 uv sync
 ```
 
-ISETrace inputs come from [valiere/ISETrace](https://huggingface.co/datasets/valiere/ISETrace) for the eight trajectory shards and [HazeLocus/ISETrace-Memory-Queries](https://huggingface.co/datasets/HazeLocus/ISETrace-Memory-Queries) for the 6,597 frozen queries and metadata; the first run downloads them automatically to `data/isetrace/raw/trajectories/` and `data/isetrace/query-authoring/`.
+ISETrace inputs come from [valiere/ISETrace](https://huggingface.co/datasets/valiere/ISETrace) (eight
+trajectory shards) and [HazeLocus/ISETrace-Memory-Queries](https://huggingface.co/datasets/HazeLocus/ISETrace-Memory-Queries)
+(the frozen queries and authoring metadata). The first run downloads both into
+`data/isetrace/raw/trajectories/` and `data/isetrace/query-authoring/`, together with the local
+encoder models under `models/`.
 
-## Core reproduction commands
+If `huggingface.co` is unreachable from your network, point the downloads at a mirror:
 
-Start with a one-query-per-required-split lifecycle check:
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+```
+
+## Reproduce
+
+Start with a one-query-per-split lifecycle check. It downloads the inputs, builds the provenance
+graph, and runs BM25 end to end:
 
 ```bash
 uv run python experiment/run.py \
@@ -22,82 +67,77 @@ uv run python experiment/run.py \
   method=bm25 split_seed=13 device=cuda:0
 ```
 
-Run the deterministic methods on the complete test set:
+Then run the paper's main conditions. Each command is a Hydra multirun; comma-separated values form a
+Cartesian product and every combination runs as its own job under `runs/<name>/`.
 
 ```bash
+# Deterministic baselines on the full test set
 uv run python experiment/run.py -m \
   name=isetrace_main_deterministic dataset=isetrace profile=full \
   method=bm25,graphrag,provenance_path \
   split_seed=13 device=cuda:0
-```
 
-Run frozen Dense with both candidate views:
-
-```bash
+# Frozen Dense over both candidate views
 uv run python experiment/run.py -m \
   name=isetrace_main_dense dataset=isetrace profile=full \
   method=dense method.variant=flat,provenance_unit \
   split_seed=13 device=cuda:0
-```
 
-Run the four fine-tuned scorer/candidate-view conditions over the five paper seeds:
-
-```bash
+# Fine-tuned scorer × candidate view, five seeds
 uv run python experiment/run.py -m \
   name=isetrace_main_finetuned dataset=isetrace profile=full \
   method=dense_ft,cross_encoder method.variant=flat,provenance_unit \
   seed=13,17,29,37,41 split_seed=13 device=cuda:0
-```
 
-Run the exact Dense-FT seed passthrough and Residual R-GCN over the same seeds:
-
-```bash
+# Seed passthrough and Residual R-GCN, five seeds
 uv run python experiment/run.py -m \
   name=isetrace_main_rgcn dataset=isetrace profile=full \
   method=provenance_unit_dense_ft_rgcn method.variant=wo_graph,full_rgcn \
   seed=13,17,29,37,41 split_seed=13 device=cuda:0
 ```
 
-`-m` enables a Hydra multirun. Comma-separated values form a Cartesian product, and every combination is an independent job with its own resolved config and output directory.
+### Key parameters
 
-## Command parameters
-
-| Parameter | Meaning | Values used for reproduction |
+| Parameter | Meaning | Paper values |
 |---|---|---|
-| `name` | Run or multirun output name under `runs/`. Use a new, descriptive name unless intentionally resuming the same run. | Any non-empty name |
-| `dataset` | Dataset configuration. | `isetrace` |
-| `profile` | Execution scale and training settings. `smoke` uses one query per required split, `quick` caps each required split at 100, and `full` uses the complete registered split. | `smoke`, `quick`, `full` |
-| `method` | Retrieval/scoring method selected for one job. | `bm25`, `dense`, `dense_ft`, `cross_encoder`, `graphrag`, `provenance_path`, `provenance_unit_dense_ft_rgcn` |
-| `method.variant` | Candidate view for Dense-family scorers, or graph condition for the Residual R-GCN method. | See the variant table below |
-| `seed` | Model training and sampling seed. Keep all five values for reported trainable results. | `13`, `17`, `29`, `37`, `41` |
-| `split_seed` | Trajectory-disjoint split seed, independent of the model seed. | `13` for every paper experiment |
-| `device` | PyTorch execution device. | `cpu`, `cuda`, or `cuda:N`, for example `cuda:0` |
-| `-m` | Enables Hydra multirun expansion for comma-separated parameter values. | Omit for one job; include for a sweep |
+| `profile` | Execution scale. `smoke` = one query per required split, `quick` = 100, `full` = complete split. | `full` |
+| `method` | Retrieval/scoring method. | `bm25`, `dense`, `dense_ft`, `cross_encoder`, `graphrag`, `provenance_path`, `provenance_unit_dense_ft_rgcn` |
+| `method.variant` | Candidate view (`flat`, `provenance_unit`) or graph condition (`wo_graph`, `full_rgcn`; controls `homogeneous_gcn`, `wo_feeds`, `wo_execution_ownership`, `wo_artifact_io`, `wo_chunk_adjacency`, `random_edges`). | See commands above |
+| `seed` | Model training and sampling seed. | `13`, `17`, `29`, `37`, `41` |
+| `split_seed` | Trajectory-disjoint split seed, independent of the model seed. | `13` |
+| `device` | PyTorch device. | `cpu`, `cuda`, `cuda:N` |
 
-Method meanings:
+Method roles: `bm25` lexical baseline; `dense` frozen E5 bi-encoder; `dense_ft` fine-tuned E5;
+`cross_encoder` fine-tuned BGE cross-encoder; `graphrag` text-derived graph baseline
+(FastGraphRAG-style, no LLM index); `provenance_path` query-conditioned expansion over observable
+provenance paths; `provenance_unit_dense_ft_rgcn` provenance-unit Dense-FT seed followed by the
+selected graph condition.
 
-| Method | Role in the paper |
-|---|---|
-| `bm25` | Lexical retrieval baseline |
-| `dense` | Frozen E5 bi-encoder retrieval |
-| `dense_ft` | Fine-tuned E5 bi-encoder retrieval |
-| `cross_encoder` | Fine-tuned BGE cross-encoder scoring |
-| `graphrag` | Text-derived graph retrieval baseline |
-| `provenance_path` | Query-conditioned expansion over observable provenance paths |
-| `provenance_unit_dense_ft_rgcn` | Provenance-unit Dense-FT seed scorer followed by the selected graph condition |
+Study-specific overrides — use only with the matched matrices in the full guide:
 
-Variant meanings and valid combinations:
+- `dataset.chunking.max_tokens=128|256|384|512` — flat chunk-size sweep;
+- `dataset.trajectories.splits.train=241|603|1205|2410` — training-size study.
 
-| Method | `method.variant` values |
-|---|---|
-| `dense`, `dense_ft`, `cross_encoder` | `flat`: fixed-size text chunks; `provenance_unit`: candidates grouped by execution provenance unit |
-| `provenance_unit_dense_ft_rgcn` | `wo_graph`: exact seed-score passthrough; `full_rgcn`: Residual R-GCN; controls: `homogeneous_gcn`, `wo_feeds`, `wo_execution_ownership`, `wo_artifact_io`, `wo_chunk_adjacency`, `random_edges` |
-| `bm25`, `graphrag`, `provenance_path` | No variant override |
+## Repository layout
 
-Common study-specific overrides are `dataset.chunking.max_tokens=128|256|384|512` for the flat chunk-size sweep and `dataset.trajectories.splits.train=241|603|1205|2410` for the training-size study. These should be used only with the matched matrices documented in the full reproduction guide.
+```
+configs/            Hydra dataset, method, profile, and stage configs
+graph_memory/       Library: datasets, retrieval methods, graph retriever, experiment flow
+experiment/         Entry point (run.py) and stage inspection
+scripts/            Analysis and figure scripts for the paper
+tests/              Contract, control, and training tests
+docs/               Architecture, contracts, and operations documentation
+```
 
-## Detailed documentation
+## Documentation
 
-- [Complete paper reproduction guide](docs/40-operations/paper-reproduction.md): inputs, exact run matrices, five-seed aggregation, Chunk Sweep, Training-Size, E4, E10, E11, and artifact locations.
-- [Generic command reference](docs/40-operations/commands.md): one-job and Hydra multirun behavior, configuration inspection, outputs, and verification commands.
-- [Documentation index](docs/README.md): architecture and maintained data/retrieval contracts.
+- [Complete reproduction guide](docs/40-operations/paper-reproduction.md) — inputs, exact run
+  matrices, five-seed aggregation, chunk sweep, training-size study, artifact locations.
+- [Command reference](docs/40-operations/commands.md) — single-job and multirun behavior, config
+  inspection, outputs, verification.
+- [Architecture](docs/30-design/architecture.md) and [data](docs/20-contracts/data-contracts.md) /
+  [retrieval](docs/20-contracts/retrieval-contracts.md) contracts.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
