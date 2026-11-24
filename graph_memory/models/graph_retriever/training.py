@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
@@ -255,7 +257,13 @@ def train_materialized_graph_retriever(
     initial_dev_metric = resolve_selection_metric(
         initial_dev_evaluation.selection_metrics, selection_settings
     )
-    best_metric = initial_dev_metric
+    if selection_settings.include_initial_state:
+        best_metric = initial_dev_metric
+    else:
+        # Any trained epoch beats this sentinel, so epoch 0 can never be selected.
+        best_metric = (
+            -math.inf if selection_settings.higher_is_better else math.inf
+        )
     best_epoch = 0
     best_state = _cpu_state_dict(model)
 

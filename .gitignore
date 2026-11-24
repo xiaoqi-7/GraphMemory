@@ -13,6 +13,8 @@ report/tmp/
 
 # Local WSDM submission template bundle; keep only the authored paper sources.
 docs/raw/wsdm2027/
+# Local clone of the Overleaf project (own git repo; contains an access key).
+docs/raw/overleaf/
 
 .venv/
 .env
@@ -30,8 +32,18 @@ report/provenance/ablation_rows.json
 # Local review interfaces; durable annotations belong under data/.
 .ui/
 
-# Stale paper draft bundle; the authoritative version is on arXiv.
+# Internal working notes, reviewer material, and paper drafts stay local.
 docs/raw/
 
 # Internal delivery note; describes the full offline package, not this repo.
 DELIVERY_README.md
+
+# LaTeX build intermediates.
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc

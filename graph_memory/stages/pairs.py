@@ -12,9 +12,8 @@ from graph_memory.datasets.isetrace.benchmark_records import (
     ISETraceRankingRecord,
 )
 from graph_memory.datasets.isetrace.training import (
-    adapt_flat_dense_training_split,
+    adapt_dense_training_split,
     adapt_provenance_training_split,
-    adapt_provenance_unit_dense_training_split,
 )
 from graph_memory.datasets.selection import (
     evidence_labels_for_dataset,
@@ -169,12 +168,9 @@ def _pair_tasks(
         rankings = ISETRACE_RANKINGS_ADAPTER.validate_python(task_inputs)
         isetrace_labels = ISETRACE_LABELS_ADAPTER.validate_python(labels)
         if method in {"dense_ft", "cross_encoder"}:
-            adapter = (
-                adapt_provenance_unit_dense_training_split
-                if candidate_view == "provenance_unit"
-                else adapt_flat_dense_training_split
+            requests, compiled_labels = adapt_dense_training_split(
+                rankings, isetrace_labels, view=candidate_view
             )
-            requests, compiled_labels = adapter(rankings, isetrace_labels)
             return [
                 TrainPairBuildTask(text_request=request, label=label)
                 for request, label in zip(requests, compiled_labels, strict=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Literal
 
 from graph_memory.graphs.provenance import (
     ARGUMENT_CHUNK_NODE,
@@ -62,14 +63,24 @@ class _TrajectoryDocumentBuilder:
         return "".join(self._parts), tuple(self._fragments)
 
 
+FlatFieldScope = Literal["all", "tool_io"]
+"""Which trajectory fields the flat view may chunk.
+
+``all`` renders messages, reasoning, tool arguments, and tool outputs (the paper's
+original flat view). ``tool_io`` drops message events entirely, so the flat view
+has the same field eligibility as provenance units while keeping fixed windows.
+"""
+
+
 def flat_trajectory_candidates(
     trajectory: CanonicalTrajectory,
     *,
     tokenizer: OffsetTokenizer,
     max_tokens: int,
     overlap_tokens: int,
+    field_scope: FlatFieldScope = "all",
 ) -> tuple[TextCandidate, ...]:
-    document, fragments = _render_trajectory(trajectory)
+    document, fragments = _render_trajectory(trajectory, field_scope=field_scope)
     chunks = token_chunks(
         document,
         tokenizer=tokenizer,
@@ -87,6 +98,9 @@ def flat_trajectory_candidates(
             continue
         identity = "\0".join(
             (
+                # The original flat view keeps its historical identity so item IDs
+                # remain comparable with previously delivered rankings.
+                *(() if field_scope == "all" else (field_scope,)),
                 trajectory.trajectory_id,
                 str(index),
                 str(chunk.char_start),
@@ -96,11 +110,19 @@ def flat_trajectory_candidates(
         digest = hashlib.sha256(identity.encode()).hexdigest()[:20]
         candidates.append(
             TextCandidate(
-                item_id=f"flat-chunk:{digest}",
+                item_id=(
+                    f"flat-chunk:{digest}"
+                    if field_scope == "all"
+                    else f"flat-tool-io-chunk:{digest}"
+                ),
                 text=chunk.text,
                 metadata={
                     "graph_id": trajectory.trajectory_id,
-                    "representation": "flat_trajectory_chunk",
+                    "representation": (
+                        "flat_trajectory_chunk"
+                        if field_scope == "all"
+                        else "flat_tool_io_chunk"
+                    ),
                     "chunk_index": index,
                     "document_char_start": chunk.char_start,
                     "document_char_end": chunk.char_end,
@@ -153,9 +175,13 @@ def provenance_unit_candidates(graph: ProvenanceGraph) -> tuple[TextCandidate, .
 
 def _render_trajectory(
     trajectory: CanonicalTrajectory,
+    *,
+    field_scope: FlatFieldScope = "all",
 ) -> tuple[str, tuple[_SourceFragment, ...]]:
     builder = _TrajectoryDocumentBuilder()
     for event in trajectory.events:
+        if isinstance(event, MessageEvent) and field_scope == "tool_io":
+            continue
         if isinstance(event, MessageEvent):
             builder.append_literal(
                 f"[message role={event.role} position={event.position.message_index}:"
@@ -224,4 +250,8 @@ def _chunk_source_spans(
     return tuple(spans)
 
 
-__all__ = ["flat_trajectory_candidates", "provenance_unit_candidates"]
+__all__ = [
+    "FlatFieldScope",
+    "flat_trajectory_candidates",
+    "provenance_unit_candidates",
+]

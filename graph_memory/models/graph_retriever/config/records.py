@@ -56,7 +56,7 @@ class RgcnModelConfig(DomainModel):
     dropout: FiniteFloat = Field(ge=0.0, lt=1.0)
     feature_config: NodeFeatureConfig
     relation_vocab: tuple[NonEmptyStr, ...] = Field(min_length=1)
-    graph_encoder_type: Literal["identity", "rgcn"]
+    graph_encoder_type: Literal["identity", "rgcn", "node_mlp"]
     message_transform_type: Literal["typed", "shared"]
     edge_weight_policy: Literal["artifact", "uniform"]
     enabled_edge_types: tuple[EdgeType, ...]

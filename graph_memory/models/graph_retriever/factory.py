@@ -4,6 +4,7 @@ from graph_memory.models.graph_retriever.config.records import RgcnModelConfig
 from graph_memory.models.graph_retriever.internals.neural import (
     EvidenceScoringModel,
     IdentityGraphEncoder,
+    NodeLocalMLPEncoder,
     RGCNGraphEncoder,
     SharedRelationTransform,
     TypedRelationTransform,
@@ -16,8 +17,14 @@ def build_model_from_config(model_config: RgcnModelConfig) -> EvidenceScoringMod
     根据保存的 model config 重建 EvidenceScoringModel。
     """
 
+    graph_encoder: IdentityGraphEncoder | NodeLocalMLPEncoder | RGCNGraphEncoder
     if model_config.graph_encoder_type == "identity" or model_config.num_layers == 0:
         graph_encoder = IdentityGraphEncoder()
+    elif model_config.graph_encoder_type == "node_mlp":
+        graph_encoder = NodeLocalMLPEncoder(
+            hidden_dim=model_config.hidden_dim,
+            num_layers=model_config.num_layers,
+        )
     elif model_config.graph_encoder_type == "rgcn":
         if model_config.message_transform_type == "typed":
 

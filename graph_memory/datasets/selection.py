@@ -32,6 +32,7 @@ from graph_memory.graphs.requests import (
     EvidenceGraphBuildNode,
     EvidenceGraphBuildRequest,
 )
+from graph_memory.retrieval.methods.ids import DenseCandidateView
 from graph_memory.retrieval.requests import TextCandidate, TextRankingRequest
 from graph_memory.retrieval.results import RankedResult
 
@@ -93,7 +94,7 @@ def text_ranking_requests_for_dataset(
     dataset: DatasetId,
     records: Sequence[object],
     *,
-    isetrace_representation: Literal["flat", "provenance"] = "flat",
+    isetrace_representation: DenseCandidateView = "flat",
 ) -> list[TextRankingRequest]:
     if dataset == "hotpotqa":
         return [
@@ -131,11 +132,7 @@ def text_ranking_requests_for_dataset(
             TextRankingRequest(
                 task_id=record.task_id,
                 query_text=record.query_text,
-                candidates=(
-                    record.provenance_candidates
-                    if isetrace_representation == "provenance"
-                    else record.flat_candidates
-                ),
+                candidates=record.candidates_for(isetrace_representation),
             )
             for record in _ISETRACE_RANKINGS.validate_python(records)
         ]

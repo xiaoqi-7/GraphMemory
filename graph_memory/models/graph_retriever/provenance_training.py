@@ -57,6 +57,9 @@ def train_provenance_graph_retriever(
     seed_signal_provider: SeedSignalProvider,
     dev_text_embedding_provider: TextEmbeddingProvider | None = None,
     dev_seed_signal_provider: SeedSignalProvider | None = None,
+    selection_settings: RgcnSelectionSettings = RgcnSelectionSettings(
+        best_metric="dev_recall_at_5", higher_is_better=True
+    ),
     device: str | torch.device,
 ) -> RgcnTrainingResult:
     """Adapt provenance tasks to the shared R-GCN optimizer and dev loop."""
@@ -149,9 +152,7 @@ def train_provenance_graph_retriever(
         model_config=model_config,
         training_config=training_config,
         dev_evaluation_callback=evaluate_dev_epoch,
-        selection_settings=RgcnSelectionSettings(
-            best_metric="dev_recall_at_5", higher_is_better=True
-        ),
+        selection_settings=selection_settings,
         device=device,
         progress_desc="provenance-rgcn epochs",
     )

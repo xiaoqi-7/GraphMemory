@@ -21,6 +21,7 @@ from graph_memory.experiment.config import (
     DenseEncoderConfig,
     ResolvedExperimentConfig,
 )
+from graph_memory.datasets.isetrace.registration import ISETRACE_REVISION
 from graph_memory.query_synthesis.provenance import authoring_metadata_path
 
 LOGGER = logging.getLogger("experiment.inputs")
@@ -28,6 +29,17 @@ LOGGER = logging.getLogger("experiment.inputs")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 HUGGINGFACE_BASE_URL = "https://huggingface.co"
 HUGGINGFACE_MIRROR_BASE_URL = "https://hf-mirror.com"
+
+_ISETRACE_SOURCE_REPO = "valiere/ISETrace"
+_ISETRACE_QUERY_REPO = "HazeLocus/ISETrace-Memory-Queries"
+_ISETRACE_QUERY_REVISION = "3130aeeaeb2b8d292c29f4c8e23303be7463732c"
+_ISETRACE_TRAJECTORY_FILES = tuple(
+    f"trajectories/trajectories-{index:05d}.jsonl" for index in range(8)
+)
+_ISETRACE_QUERY_FILES = (
+    "query-authoring/isetrace-v7-raw.jsonl",
+    "query-authoring/isetrace-v7-raw.jsonl.metadata.jsonl",
+)
 
 # dataset config name -> (prepare_dataset registry key, data/<dir> directory).
 _DATASET_REGISTRY_KEYS: dict[DatasetName, tuple[str, str]] = {
@@ -65,6 +77,10 @@ def ensure_dataset(
     repository_root: Path = REPOSITORY_ROOT,
 ) -> None:
     """Download raw files for the configured dataset when any split is missing."""
+    if config.dataset.name == "isetrace":
+        _ensure_isetrace_dataset(config, repository_root=repository_root)
+        return
+
     sources = [
         _resolve(split.source, repository_root)
         for split in config.dataset.splits.values()
@@ -104,6 +120,74 @@ def ensure_dataset(
             "--no_verify",
         ]
     )
+
+
+def _ensure_isetrace_dataset(
+    config: ResolvedExperimentConfig,
+    *,
+    repository_root: Path,
+) -> None:
+    trajectory_source = config.dataset.trajectory_source
+    query_source = config.dataset.natural_query_source
+    if trajectory_source is None or query_source is None:
+        raise ValueError("ISETrace dataset sources are not resolved")
+
+    trajectory_target = _resolve(trajectory_source, repository_root)
+    query_target = _resolve(query_source, repository_root)
+    metadata_target = authoring_metadata_path(query_target)
+    required_trajectories = tuple(
+        trajectory_target / Path(filename).name
+        for filename in _ISETRACE_TRAJECTORY_FILES
+    )
+
+    from huggingface_hub import snapshot_download  # pyright: ignore[reportUnknownVariableType]
+
+    if not all(path.exists() for path in required_trajectories):
+        if trajectory_target.name != "trajectories":
+            raise FileNotFoundError(
+                f"automatic ISETrace download requires trajectory_source to end in "
+                f"'trajectories'; configured={trajectory_target}"
+            )
+        LOGGER.info(
+            "ISETrace trajectories missing; downloading %s@%s",
+            _ISETRACE_SOURCE_REPO,
+            ISETRACE_REVISION,
+        )
+        _ = snapshot_download(
+            repo_id=_ISETRACE_SOURCE_REPO,
+            repo_type="dataset",
+            revision=ISETRACE_REVISION,
+            local_dir=str(trajectory_target.parent),
+            allow_patterns=list(_ISETRACE_TRAJECTORY_FILES),
+            endpoint=HUGGINGFACE_BASE_URL,
+        )
+
+    if not query_target.exists() or not metadata_target.exists():
+        if query_target.parent.name != "query-authoring":
+            raise FileNotFoundError(
+                f"automatic ISETrace query download requires natural_query_source "
+                f"under a 'query-authoring' directory; configured={query_target}"
+            )
+        LOGGER.info(
+            "ISETrace queries missing; downloading %s@%s",
+            _ISETRACE_QUERY_REPO,
+            _ISETRACE_QUERY_REVISION,
+        )
+        _ = snapshot_download(
+            repo_id=_ISETRACE_QUERY_REPO,
+            repo_type="dataset",
+            revision=_ISETRACE_QUERY_REVISION,
+            local_dir=str(query_target.parent.parent),
+            allow_patterns=list(_ISETRACE_QUERY_FILES),
+            endpoint=HUGGINGFACE_BASE_URL,
+        )
+
+    required = (*required_trajectories, query_target, metadata_target)
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "ISETrace download completed without required files: " + ", ".join(missing)
+        )
 
 
 def ensure_encoder_models(
@@ -148,6 +232,8 @@ def _ensure_model(model_name: str, *, repository_root: Path) -> None:
 
 def _collect_model_names(config: ResolvedExperimentConfig) -> set[str]:
     names: set[str] = set()
+    if config.dataset.chunking is not None:
+        names.add(config.dataset.chunking.tokenizer_name)
     _walk_for_models(config.method, names)
     return names
 

@@ -79,6 +79,17 @@ def adapt_provenance_unit_dense_training_split(
     )
 
 
+def adapt_dense_training_split(
+    rankings: Sequence[ISETraceRankingRecord],
+    labels: Sequence[ISETraceLabelRecord],
+    *,
+    view: DenseCandidateView,
+) -> tuple[list[TextRankingRequest], list[EvidenceLabel]]:
+    """Compile exact ISETrace spans into Dense-FT supervision for one candidate view."""
+
+    return _adapt_dense_training_split(rankings, labels, representation=view)
+
+
 def _adapt_dense_training_split(
     rankings: Sequence[ISETraceRankingRecord],
     labels: Sequence[ISETraceLabelRecord],
@@ -99,11 +110,7 @@ def _adapt_dense_training_split(
             raise ValueError(
                 f"ISETrace {representation} training rankings and labels must align"
             )
-        candidates = (
-            ranking.provenance_candidates
-            if representation == "provenance_unit"
-            else ranking.flat_candidates
-        )
+        candidates = ranking.candidates_for(representation)
         positive_ids = tuple(
             candidate.item_id
             for candidate in candidates
@@ -143,6 +150,7 @@ def _adapt_dense_training_split(
 
 
 __all__ = [
+    "adapt_dense_training_split",
     "adapt_flat_dense_training_split",
     "adapt_provenance_training_split",
     "adapt_provenance_unit_dense_training_split",

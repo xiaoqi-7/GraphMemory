@@ -69,21 +69,15 @@ def build_retrieve_stage(
         dataset,
         task_inputs,
         isetrace_representation=(
-            "provenance"
-            if (
-                isinstance(
-                    method,
-                    (
-                        DenseMethodConfig,
-                        DenseFinetuneMethodConfig,
-                        CrossEncoderMethodConfig,
-                    ),
-                )
-                and method.variant == "provenance_unit"
-            )
-            or isinstance(
+            "provenance_unit"
+            if isinstance(
                 method,
                 (ProvenancePathMethodConfig, ProvenanceRgcnMethodConfig),
+            )
+            else method.variant
+            if isinstance(
+                method,
+                (DenseMethodConfig, DenseFinetuneMethodConfig, CrossEncoderMethodConfig),
             )
             else "flat"
         ),

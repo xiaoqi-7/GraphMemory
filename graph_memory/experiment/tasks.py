@@ -84,7 +84,7 @@ def prepare_split_task(
     config: PrepareSplitConfig,
     trajectory_source: FileSourceRef | DirectorySourceRef | None = None,
     authoring_metadata_source: FileSourceRef | None = None,
-    implementation_version: str = "prepare-v10-fixed-dev-tail",
+    implementation_version: str = "prepare-v11-flat-tool-io-view",
 ) -> DatasetArtifactRef:
     get_run_logger().info(
         "prepare split | dataset=%s split=%s count=%s",

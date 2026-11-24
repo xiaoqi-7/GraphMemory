@@ -77,6 +77,7 @@ PROVENANCE_CONTROL_VARIANTS = frozenset(
         "wo_artifact_io",
         "wo_chunk_adjacency",
         "random_edges",
+        "node_mlp",
     }
 )
 _RELATIONS_REMOVED_BY_VARIANT: dict[str, frozenset[str]] = {
@@ -139,6 +140,17 @@ def provenance_rgcn_model_config(
     policy = _provenance_control_policy(
         canonical_ablation, message_topology_seed=message_topology_seed
     )
+    graph_encoder_type: Literal["identity", "rgcn", "node_mlp"] = (
+        "identity" if layer_count == 0 else "rgcn"
+    )
+    if canonical_ablation == "node_mlp":
+        graph_encoder_type = "node_mlp"
+        hidden_dim = matched_node_mlp_hidden_dim(
+            reference_hidden_dim=hidden_dim,
+            num_layers=layer_count,
+            num_relations=len(PROVENANCE_RELATION_VOCAB),
+            encoder_dim=encoder_dim,
+        )
     return RgcnModelConfig(
         method_name="provenance_rgcn",
         encoder_model=encoder_model,
@@ -154,7 +166,7 @@ def provenance_rgcn_model_config(
             scorer_feature_names=("seed_score",),
         ),
         relation_vocab=policy.relation_vocab,
-        graph_encoder_type="identity" if layer_count == 0 else "rgcn",
+        graph_encoder_type=graph_encoder_type,
         message_transform_type=policy.message_transform_type,
         edge_weight_policy="uniform",
         enabled_edge_types=(),
@@ -163,6 +175,55 @@ def provenance_rgcn_model_config(
         message_topology_seed=policy.message_topology_seed,
         ablation_name=canonical_ablation,
         scoring_mode="seed_passthrough" if layer_count == 0 else "seed_residual",
+    )
+
+
+def _provenance_residual_parameter_count(
+    *,
+    hidden_dim: int,
+    num_layers: int,
+    encoder_dim: int,
+    num_relations: int,
+) -> int:
+    """Trainable parameters of the provenance residual model.
+
+    ``num_relations=0`` counts the node-local MLP (no relation transforms).
+    Mirrors EvidenceScoringModel with one node feature and one scorer feature.
+    """
+
+    h = hidden_dim
+    input_projection = (encoder_dim + 1) * h + h
+    layer = num_relations * h * h + (h * h + h) + 2 * h
+    scorer = (3 * h + 1) * h + h + (h + 1)
+    return input_projection + num_layers * layer + scorer
+
+
+def matched_node_mlp_hidden_dim(
+    *,
+    reference_hidden_dim: int,
+    num_layers: int,
+    num_relations: int,
+    encoder_dim: int,
+) -> int:
+    """Width whose node-local MLP parameter count is closest to the typed R-GCN."""
+
+    target = _provenance_residual_parameter_count(
+        hidden_dim=reference_hidden_dim,
+        num_layers=num_layers,
+        encoder_dim=encoder_dim,
+        num_relations=num_relations,
+    )
+    return min(
+        range(reference_hidden_dim, 8 * reference_hidden_dim + 1),
+        key=lambda width: abs(
+            _provenance_residual_parameter_count(
+                hidden_dim=width,
+                num_layers=num_layers,
+                encoder_dim=encoder_dim,
+                num_relations=0,
+            )
+            - target
+        ),
     )
 
 
@@ -805,6 +866,7 @@ def tensorize_provenance_ranking_tasks(
 __all__ = [
     "HOMOGENEOUS_PROVENANCE_RELATION_VOCAB",
     "PROVENANCE_CONTROL_VARIANTS",
+    "matched_node_mlp_hidden_dim",
     "PROVENANCE_PHYSICAL_RELATIONS",
     "PROVENANCE_RANDOM_EDGE_SEED",
     "PROVENANCE_RELATION_VOCAB",

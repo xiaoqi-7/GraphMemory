@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from functools import partial
+from typing import cast
+
 import pytest
 
 from graph_memory.experiment.config import ProvenanceRgcnMethodConfig
@@ -18,6 +21,7 @@ from graph_memory.models.graph_retriever.provenance import (
 from graph_memory.models.graph_retriever.provenance_training import (
     train_provenance_graph_retriever,
 )
+from graph_memory.models.graph_retriever.selection import RgcnSelectionSettings
 from graph_memory.retrieval.execution.service import run_retrieval
 from graph_memory.retrieval.methods.ids import RetrievalMethodId
 from graph_memory.retrieval.requests import TextRankingRequest
@@ -30,7 +34,7 @@ from tests.test_provenance_rgcn_tensorization import (
 )
 
 
-def test_tiny_natural_provenance_training_and_checkpoint(tmp_path) -> None:
+def _tiny_training_inputs():
     graph, base_request = _graph_and_request(
         task_id="base-task", query_text="Which result completed the chain?"
     )
@@ -72,23 +76,33 @@ def test_tiny_natural_provenance_training_and_checkpoint(tmp_path) -> None:
     )
     dev_labels = [label_for(request) for request in requests[2:]]
     provider = DeterministicEmbeddingProvider()
-    result = train_provenance_graph_retriever(
+    train = partial(
+        train_provenance_graph_retriever,
         train_requests=requests[:2],
         train_labels=train_labels,
         train_pairs=pair_result.pairs,
         dev_requests=requests[2:],
         dev_labels=dev_labels,
         model_config=_model_config(),
-        training_config=RgcnTrainingConfig(
-            learning_rate=1e-3,
-            per_device_graph_batch_size=2,
-            epochs=1,
-            random_seed=19,
-        ),
         text_embedding_provider=provider,
         seed_signal_provider=provider,
         device="cpu",
     )
+    return train, graph, requests
+
+
+def _training_config(*, epochs: int) -> RgcnTrainingConfig:
+    return RgcnTrainingConfig(
+        learning_rate=1e-3,
+        per_device_graph_batch_size=2,
+        epochs=epochs,
+        random_seed=19,
+    )
+
+
+def test_tiny_natural_provenance_training_and_checkpoint(tmp_path) -> None:
+    train, graph, requests = _tiny_training_inputs()
+    result = train(training_config=_training_config(epochs=1))
 
     assert result.best_epoch in {0, 1}
     assert result.global_step == 1
@@ -277,4 +291,36 @@ def test_provenance_checkpoint_round_trip_requires_matching_method(tmp_path) -> 
             checkpoint_path,
             expected_method=RetrievalMethodId.DENSE_RGCN_GRAPH_RETRIEVER,
             map_location="cpu",
+        )
+
+
+@pytest.mark.parametrize("include_initial_state", [True, False])
+def test_selection_can_exclude_the_untrained_initial_state(
+    include_initial_state: bool,
+) -> None:
+    train, _graph, _requests = _tiny_training_inputs()
+    result = train(
+        training_config=_training_config(epochs=2),
+        selection_settings=RgcnSelectionSettings(
+            best_metric="dev_recall_at_5",
+            higher_is_better=True,
+            include_initial_state=include_initial_state,
+        ),
+    )
+
+    trained_values = [
+        float(cast(float, row["selection_metric_value"]))
+        for row in result.metric_records
+    ]
+    initial_value = float(
+        cast(float, result.metric_records[0]["initial_selection_metric_value"])
+    )
+    if include_initial_state:
+        assert result.best_dev_metric == max([initial_value, *trained_values])
+    else:
+        assert result.best_epoch >= 1
+        assert result.best_dev_metric == max(trained_values)
+        assert (
+            result.metric_records[result.best_epoch - 1]["selection_metric_value"]
+            == result.best_dev_metric
         )

@@ -158,6 +158,50 @@ class RelationalGraphConvLayer(nn.Module):
         return self.layer_norm(torch.relu(next_states))
 
 
+class NodeLocalLayer(nn.Module):
+    """
+    Graph-free counterpart of RelationalGraphConvLayer.
+    RelationalGraphConvLayer 的无图对照层。
+
+    It applies the same self transform, ReLU, and LayerNorm as one R-GCN layer
+    but never reads edges, so each node state depends only on that node.
+    与单层 R-GCN 使用相同的自身变换、ReLU 和 LayerNorm，但从不读取边，
+    每个节点的状态只取决于它自己。
+    """
+
+    def __init__(self, *, hidden_dim: int) -> None:
+        super().__init__()
+        self.self_linear = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, node_states: Tensor) -> Tensor:
+        return self.layer_norm(torch.relu(self.self_linear(node_states)))
+
+
+class NodeLocalMLPEncoder(nn.Module):
+    """
+    Stacked node-local layers used as the parameter-matched non-graph residual.
+    作为参数量匹配的无图 residual 对照的堆叠节点局部层。
+
+    The batch argument is accepted for interface compatibility and ignored.
+    接受 batch 参数仅为接口兼容，实际不使用。
+    """
+
+    def __init__(self, *, hidden_dim: int, num_layers: int) -> None:
+        super().__init__()
+        if num_layers <= 0:
+            raise ValueError("node-local MLP encoder requires num_layers > 0.")
+        self.layers = nn.ModuleList(
+            NodeLocalLayer(hidden_dim=hidden_dim) for _ in range(num_layers)
+        )
+
+    def forward(self, batch: GraphBatch, node_states: Tensor) -> Tensor:
+        encoded = node_states
+        for layer in self.layers:
+            encoded = layer(encoded)
+        return encoded
+
+
 class RGCNGraphEncoder(nn.Module):
     """
     Stacked R-GCN graph encoder.

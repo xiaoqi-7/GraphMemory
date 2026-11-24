@@ -30,3 +30,4 @@ train:
   selection:
     best_metric: dev_recall_at_5
     higher_is_better: true
+    include_initial_state: true

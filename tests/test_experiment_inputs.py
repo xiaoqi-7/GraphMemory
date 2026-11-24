@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import huggingface_hub
 import pytest
 
 from graph_memory.experiment import inputs
+from graph_memory.experiment.config import (
+    Bm25MethodConfig,
+    ISETraceChunkingConfig,
+    ResolvedDatasetConfig,
+    ResolvedExperimentConfig,
+)
 from scripts import prepare_dataset
 
 
@@ -146,6 +153,90 @@ def test_encoder_download_uses_official_huggingface_endpoint_and_revision(
             "repo_id": "BAAI/bge-reranker-base",
             "revision": "2cfc18c9415c912f9d8155881c133215df768a70",
             "local_dir": str(tmp_path / "models/BAAI-bge-reranker-base"),
+            "endpoint": inputs.HUGGINGFACE_BASE_URL,
+        },
+    ]
+
+
+def test_isetrace_chunk_tokenizer_is_provisioned_for_bm25(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, Path]] = []
+
+    def ensure_model(model_name: str, *, repository_root: Path) -> None:
+        calls.append((model_name, repository_root))
+
+    monkeypatch.setattr(inputs, "_ensure_model", ensure_model)
+    dataset = ResolvedDatasetConfig.model_construct(
+        name="isetrace",
+        chunking=ISETraceChunkingConfig(
+            tokenizer_name="models/intfloat-e5-base-v2",
+        ),
+        splits={},
+    )
+    config = ResolvedExperimentConfig.model_construct(
+        dataset=dataset,
+        method=Bm25MethodConfig(method="bm25"),
+    )
+
+    inputs.ensure_encoder_models(config, repository_root=tmp_path)
+
+    assert calls == [("models/intfloat-e5-base-v2", tmp_path)]
+
+
+def test_isetrace_download_uses_pinned_public_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def snapshot_download(**kwargs: object) -> str:
+        calls.append(kwargs)
+        local_dir = Path(str(kwargs["local_dir"]))
+        patterns = cast(list[object], kwargs["allow_patterns"])
+        for filename in patterns:
+            assert isinstance(filename, str)
+            target = local_dir / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _ = target.write_text("{}\n", encoding="utf-8")
+        return str(local_dir)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    dataset = ResolvedDatasetConfig.model_construct(
+        name="isetrace",
+        trajectory_source=Path("data/isetrace/raw/trajectories"),
+        natural_query_source=Path(
+            "data/isetrace/query-authoring/isetrace-v7-raw.jsonl"
+        ),
+        splits={},
+    )
+    config = ResolvedExperimentConfig.model_construct(dataset=dataset)
+
+    inputs.ensure_dataset(config, repository_root=tmp_path)
+    inputs.ensure_dataset(config, repository_root=tmp_path)
+
+    assert calls == [
+        {
+            "repo_id": "valiere/ISETrace",
+            "repo_type": "dataset",
+            "revision": "e40e04d41c04e4eb4bae181ebdd41b61c688081b",
+            "local_dir": str(tmp_path / "data/isetrace/raw"),
+            "allow_patterns": [
+                f"trajectories/trajectories-{index:05d}.jsonl"
+                for index in range(8)
+            ],
+            "endpoint": inputs.HUGGINGFACE_BASE_URL,
+        },
+        {
+            "repo_id": "HazeLocus/ISETrace-Memory-Queries",
+            "repo_type": "dataset",
+            "revision": "3130aeeaeb2b8d292c29f4c8e23303be7463732c",
+            "local_dir": str(tmp_path / "data/isetrace"),
+            "allow_patterns": [
+                "query-authoring/isetrace-v7-raw.jsonl",
+                "query-authoring/isetrace-v7-raw.jsonl.metadata.jsonl",
+            ],
             "endpoint": inputs.HUGGINGFACE_BASE_URL,
         },
     ]

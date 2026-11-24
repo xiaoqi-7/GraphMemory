@@ -75,6 +75,7 @@ ProvenanceRgcnVariant: TypeAlias = Literal[
     "wo_artifact_io",
     "wo_chunk_adjacency",
     "random_edges",
+    "node_mlp",
 ]
 EvidenceRgcnVariant: TypeAlias = Literal[
     "full_rgcn",
@@ -474,7 +475,7 @@ class PairBuildConfig(ClosedModel):
     def _validate_candidate_view(self) -> "PairBuildConfig":
         if self.method not in {"dense_ft", "cross_encoder"} and self.candidate_view != "flat":
             raise ValueError(
-                "candidate_view='provenance_unit' is valid only for dense_ft or cross_encoder pairs"
+                f"candidate_view={self.candidate_view!r} is valid only for dense_ft or cross_encoder pairs"
             )
         return self
 
@@ -731,7 +732,7 @@ def _check_dataset_method_compatibility(
             method,
             (DenseMethodConfig, DenseFinetuneMethodConfig, CrossEncoderMethodConfig),
         )
-        and method.variant == "provenance_unit"
+        and method.variant != "flat"
     ) or isinstance(method, CrossEncoderMethodConfig)
     evidence_only = isinstance(method, (RgcnMethodConfig, DenseFtRgcnMethodConfig))
     if (

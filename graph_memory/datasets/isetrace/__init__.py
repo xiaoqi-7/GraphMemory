@@ -19,6 +19,7 @@ from graph_memory.datasets.isetrace.benchmark_records import (
 )
 from graph_memory.datasets.isetrace.records import ISETraceRecord
 from graph_memory.datasets.isetrace.training import (
+    adapt_dense_training_split,
     adapt_flat_dense_training_split,
     adapt_provenance_training_split,
     adapt_provenance_unit_dense_training_split,
@@ -33,6 +34,7 @@ __all__ = [
     "ISETraceQueryMetadata",
     "ISETraceRankingRecord",
     "ISETraceRecord",
+    "adapt_dense_training_split",
     "adapt_flat_dense_training_split",
     "adapt_isetrace_record",
     "adapt_provenance_training_split",

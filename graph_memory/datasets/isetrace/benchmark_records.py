@@ -4,6 +4,7 @@ from pydantic import Field, model_validator
 
 from graph_memory.graphs.provenance import ProvenanceGraph
 from graph_memory.query_synthesis.provenance.authoring import MemoryQueryMode
+from graph_memory.retrieval.methods.ids import DenseCandidateView
 from graph_memory.retrieval.requests import TextCandidate
 from graph_memory.trajectories import SourceSpan
 from graph_memory.contracts.model import DomainModel, NonEmptyStr
@@ -15,12 +16,27 @@ class ISETraceRankingRecord(DomainModel):
     query_text: NonEmptyStr
     flat_candidates: tuple[TextCandidate, ...] = Field(min_length=1)
     provenance_candidates: tuple[TextCandidate, ...] = Field(min_length=1)
+    # Empty only in artifacts prepared before the tool-field flat control existed.
+    flat_tool_io_candidates: tuple[TextCandidate, ...] = ()
+
+    def candidates_for(self, view: DenseCandidateView) -> tuple[TextCandidate, ...]:
+        if view == "provenance_unit":
+            return self.provenance_candidates
+        if view == "flat":
+            return self.flat_candidates
+        if not self.flat_tool_io_candidates:
+            raise ValueError(
+                f"task={self.task_id!r} has no flat_tool_io candidates; "
+                "re-prepare the dataset with the current implementation"
+            )
+        return self.flat_tool_io_candidates
 
     @model_validator(mode="after")
     def _validate_ranking(self) -> "ISETraceRankingRecord":
         for name, candidates in (
             ("flat_candidates", self.flat_candidates),
             ("provenance_candidates", self.provenance_candidates),
+            ("flat_tool_io_candidates", self.flat_tool_io_candidates),
         ):
             candidate_ids = [candidate.item_id for candidate in candidates]
             if len(candidate_ids) != len(set(candidate_ids)):

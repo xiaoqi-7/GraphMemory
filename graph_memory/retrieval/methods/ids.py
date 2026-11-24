@@ -4,7 +4,13 @@ from typing import Literal, TypeAlias
 
 from graph_memory.compat import StrEnum
 
-DenseCandidateView: TypeAlias = Literal["flat", "provenance_unit"]
+DenseCandidateView: TypeAlias = Literal["flat", "flat_tool_io", "provenance_unit"]
+"""Candidate view for text scorers.
+
+``flat`` chunks the whole rendered trajectory; ``flat_tool_io`` chunks only tool
+arguments and outputs with the same windows; ``provenance_unit`` uses the
+field-aligned provenance units.
+"""
 
 
 class RetrievalMethodId(StrEnum):

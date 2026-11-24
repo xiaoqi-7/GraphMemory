@@ -26,8 +26,16 @@ SUPPORTED_RGCN_SELECTION_METRICS: tuple[RgcnSelectionMetric, ...] = (
 
 
 class RgcnSelectionSettings(DomainModel):
+    """Dev-selection rule for R-GCN checkpoints.
+
+    ``include_initial_state`` lets the untrained (epoch-0) model win selection.
+    With a zero-initialized seed residual that state is the exact seed ranking, so
+    disabling it forces the reported model to be one that was actually trained.
+    """
+
     best_metric: RgcnSelectionMetric = "dev_composite"
     higher_is_better: bool = True
+    include_initial_state: bool = True
 
 
 def build_selection_metrics(

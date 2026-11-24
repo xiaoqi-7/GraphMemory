@@ -15,9 +15,8 @@ from graph_memory.datasets.isetrace.benchmark_records import (
     ISETraceRankingRecord,
 )
 from graph_memory.datasets.isetrace.training import (
-    adapt_flat_dense_training_split,
+    adapt_dense_training_split,
     adapt_provenance_training_split,
-    adapt_provenance_unit_dense_training_split,
 )
 from graph_memory.datasets.selection import (
     evidence_labels_for_dataset,
@@ -213,12 +212,9 @@ def _dense_finetune_split(
 
     rankings = ISETRACE_RANKINGS_ADAPTER.validate_python(tasks)
     isetrace_labels = ISETRACE_LABELS_ADAPTER.validate_python(labels)
-    adapter = (
-        adapt_provenance_unit_dense_training_split
-        if variant == "provenance_unit"
-        else adapt_flat_dense_training_split
+    requests, compiled_labels = adapt_dense_training_split(
+        rankings, isetrace_labels, view=variant
     )
-    requests, compiled_labels = adapter(rankings, isetrace_labels)
     group_ids = {ranking.task_id: ranking.graph_id for ranking in rankings}
     return requests, compiled_labels, group_ids
 
@@ -576,6 +572,7 @@ def materialize_provenance_rgcn_model(
             seed_signal_provider=train_provider,
             dev_text_embedding_provider=dev_provider,
             dev_seed_signal_provider=dev_provider,
+            selection_settings=config.train.selection,
             device=config.train.trainer.device,
         )
         checkpoints = publisher.workspace / "checkpoints"
@@ -612,7 +609,10 @@ def materialize_provenance_rgcn_model(
                 "best_epoch": result.best_epoch,
                 "global_step": result.global_step,
                 "best_dev_metric": result.best_dev_metric,
-                "selection_metric": "dev_recall_at_5",
+                "selection_metric": config.train.selection.best_metric,
+                "selection_includes_initial_state": (
+                    config.train.selection.include_initial_state
+                ),
                 "seed_model_digest": None if seed_model is None else seed_model.digest,
             },
         )

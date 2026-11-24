@@ -176,6 +176,16 @@ def prepare_isetrace_benchmark(
         )
         for graph_id in sorted(graphs)
     }
+    flat_tool_io_by_graph_id = {
+        graph_id: flat_trajectory_candidates(
+            trajectories[graph_id],
+            tokenizer=offset_tokenizer,
+            max_tokens=chunking.content_tokens,
+            overlap_tokens=chunking.overlap_tokens,
+            field_scope="tool_io",
+        )
+        for graph_id in sorted(graphs)
+    }
     provenance_by_graph_id = {
         graph_id: provenance_unit_candidates(graph)
         for graph_id, graph in graphs.items()
@@ -192,6 +202,7 @@ def prepare_isetrace_benchmark(
             query_text=example.query,
             flat_candidates=flat_by_graph_id[graph_id],
             provenance_candidates=provenance_by_graph_id[graph_id],
+            flat_tool_io_candidates=flat_tool_io_by_graph_id[graph_id],
         )
         label = ISETraceLabelRecord(
             task_id=example.id,
@@ -232,6 +243,12 @@ def prepare_isetrace_benchmark(
     )
     summary["unique_flat_candidates"] = sum(
         len(flat_by_graph_id[graph_id]) for graph_id in selected_graph_ids
+    )
+    summary["flat_tool_io_candidates"] = sum(
+        len(item.flat_tool_io_candidates) for item in rankings
+    )
+    summary["unique_flat_tool_io_candidates"] = sum(
+        len(flat_tool_io_by_graph_id[graph_id]) for graph_id in selected_graph_ids
     )
     summary["unique_provenance_candidates"] = sum(
         len(provenance_by_graph_id[graph_id]) for graph_id in selected_graph_ids
