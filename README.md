@@ -8,12 +8,15 @@ query needs?
 
 ![EPGM pipeline](docs/assets/architecture.png)
 
-Four stages. **(A)** A raw agent trace of tool calls and outputs. **(B)** Candidates are built from
-execution-aligned units (one field, one unit) plus an observable provenance graph whose edges are
-string-matched value reuse, artifact read/write, and call/return links — built without ever looking at
-a query. **(C)** A semantic scorer anchors the query to a few top candidates. **(D)** Evidence
-completion expands from those anchors under a fixed token budget: training-free graph search over
-observable paths, or a learned Residual R-GCN whose output is added to the seed score.
+**(1) Segmentation.** Each execution trace is split into provenance units: every tool-argument and
+tool-output field is chunked on its own, messages and reasoning are dropped, and every unit maps back
+to exact source spans. **(2) Graph construction.** A provenance graph over agents, tool calls, outputs,
+chunks, and artifacts is built once per trajectory, without looking at any query, using typed edges
+(`has_argument`, `returns`, `next`, `has_content`, `reads/writes`, and string-matched `feeds`).
+**(3) Scoring.** A fine-tuned Dense bi-encoder gives each unit a seed score; a zero-initialized R-GCN
+over the typed graph adds a learned residual, so training starts exactly at the seed ranking.
+**(4) Budgeted inference.** Units are added greedily in final-score order until the token budget `B`
+is full.
 
 The contribution is a controlled attribution, not a new model: the repository reproduces the
 separation between **which fields are indexed**, **how those fields are grouped into candidates**, and
