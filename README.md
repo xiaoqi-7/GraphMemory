@@ -101,8 +101,11 @@ uv run python experiment/run.py -m \
 # Camera-ready additions: tool-field flat view (B) and the node-local MLP residual
 uv run python experiment/run.py -m \
   name=isetrace_cr_views dataset=isetrace profile=full \
-  method=dense,dense_ft,cross_encoder method.variant=flat_tool_io \
+  method=dense_ft,cross_encoder method.variant=flat_tool_io \
   seed=13,17,29,37,41 split_seed=13 device=cuda:0
+uv run python experiment/run.py \
+  name=isetrace_cr_dense_tool_io dataset=isetrace profile=full \
+  method=dense method.variant=flat_tool_io seed=13 split_seed=13 device=cuda:0
 uv run python experiment/run.py -m \
   name=isetrace_cr_node_mlp dataset=isetrace profile=full \
   method=provenance_unit_dense_ft_rgcn method.variant=node_mlp \
