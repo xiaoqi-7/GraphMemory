@@ -1,7 +1,7 @@
 # EPGM: When Does Execution Provenance Help Agent Memory Retrieval?
 
 Code and configurations for the paper **"When Does Execution Provenance Help Agent Memory Retrieval?"**
-(WSDM 2027, Findings). The study asks a narrow question: once an agent's execution trace is already
+(WSDM 2027, Findings; extended version with appendix: [arXiv:2609.25913](https://arxiv.org/abs/2609.25913)). The study asks a narrow question: once an agent's execution trace is already
 indexed and retrievable by a semantic scorer, does propagating over the *execution relationships*
 between the events — what produced what, what was read by what — recover more of the evidence the
 query needs?
@@ -97,7 +97,28 @@ uv run python experiment/run.py -m \
   name=isetrace_main_rgcn dataset=isetrace profile=full \
   method=provenance_unit_dense_ft_rgcn method.variant=wo_graph,full_rgcn \
   seed=13,17,29,37,41 split_seed=13 device=cuda:0
+
+# Camera-ready additions: tool-field flat view (B) and the node-local MLP residual
+uv run python experiment/run.py -m \
+  name=isetrace_cr_views dataset=isetrace profile=full \
+  method=dense,dense_ft,cross_encoder method.variant=flat_tool_io \
+  seed=13,17,29,37,41 split_seed=13 device=cuda:0
+uv run python experiment/run.py -m \
+  name=isetrace_cr_node_mlp dataset=isetrace profile=full \
+  method=provenance_unit_dense_ft_rgcn method.variant=node_mlp \
+  seed=13,17,29,37,41 split_seed=13 device=cuda:0
+
+# Trained-only checkpoint rule (never select the zero-initialized epoch 0)
+uv run python experiment/run.py -m \
+  name=isetrace_cr_trained_only dataset=isetrace profile=full \
+  method=provenance_unit_dense_ft_rgcn \
+  method.variant=node_mlp,wo_feeds,wo_execution_ownership,random_edges \
+  method.train.selection.include_initial_state=false \
+  seed=13,17,29,37,41 split_seed=13 device=cuda:0
 ```
+
+The exact per-run names, run order, and cache reuse behind every table of the camera-ready paper are
+listed in [Section 3 of the reproduction guide](docs/40-operations/paper-reproduction.md#3-camera-ready-rerun).
 
 ### Key parameters
 
@@ -105,7 +126,8 @@ uv run python experiment/run.py -m \
 |---|---|---|
 | `profile` | Execution scale. `smoke` = one query per required split, `quick` = 100, `full` = complete split. | `full` |
 | `method` | Retrieval/scoring method. | `bm25`, `dense`, `dense_ft`, `cross_encoder`, `graphrag`, `provenance_path`, `provenance_unit_dense_ft_rgcn` |
-| `method.variant` | Candidate view (`flat`, `provenance_unit`) or graph condition (`wo_graph`, `full_rgcn`; controls `homogeneous_gcn`, `wo_feeds`, `wo_execution_ownership`, `wo_artifact_io`, `wo_chunk_adjacency`, `random_edges`). | See commands above |
+| `method.variant` | Candidate view: `flat` = all-field flat (A), `flat_tool_io` = tool-field flat (B), `provenance_unit` = provenance units (D). Graph condition: `wo_graph` (seed passthrough), `full_rgcn`, `node_mlp` (parameter-matched node-local MLP residual); controls `homogeneous_gcn`, `wo_feeds`, `wo_execution_ownership`, `wo_artifact_io`, `wo_chunk_adjacency`, `random_edges`. | See commands above |
+| `method.train.selection.include_initial_state` | Whether development selection may keep the zero-initialized epoch-0 state. `false` gives the trained-only rows. | `true` (default), `false` |
 | `seed` | Model training and sampling seed. | `13`, `17`, `29`, `37`, `41` |
 | `split_seed` | Trajectory-disjoint split seed, independent of the model seed. | `13` |
 | `device` | PyTorch device. | `cpu`, `cuda`, `cuda:N` |
@@ -140,6 +162,18 @@ docs/               Architecture, contracts, and operations documentation
   inspection, outputs, verification.
 - [Architecture](docs/30-design/architecture.md) and [data](docs/20-contracts/data-contracts.md) /
   [retrieval](docs/20-contracts/retrieval-contracts.md) contracts.
+
+## Citation
+
+```bibtex
+@inproceedings{wang2027epgm,
+  author    = {Wang, Yiqi and Ju, Jinqian and Zhang, Jiaqi and Sun, Zequn and Duan, Yiqun and Zheng, Mingkai and Cai, Taotao},
+  title     = {When Does Execution Provenance Help Agent Memory Retrieval?},
+  booktitle = {Proceedings of the Twentieth ACM International Conference on Web Search and Data Mining (WSDM '27)},
+  year      = {2027},
+  note      = {Findings. Extended version: arXiv:2609.25913}
+}
+```
 
 ## License
 
